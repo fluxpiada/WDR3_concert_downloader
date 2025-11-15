@@ -1,4 +1,6 @@
-beautifulsoup4>=4.12.3
-pydantic>=2.8.2
+beautifulsoup4>=4.13.4
+pydantic>=2.11.5
 requests>=2.32.3
-setuptools>=72.2.0
+setuptools>=80.9.0
+js2py-3.13>=0.74.1
+pymp3==0.2.0

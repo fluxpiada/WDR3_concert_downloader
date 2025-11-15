@@ -1,0 +1,15 @@
+services:
+################################################################################
+# Webradio Rest API
+################################################################################
+  webradio:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: 'webradio:0.1'
+    container_name: "webradio"
+    volumes:
+      - ${MP3_DIR}:/app/data
+    restart: unless-stopped
+    ports:
+      - "5010:5010"
