@@ -3,7 +3,7 @@
 # ToDo yet to investigate:
 #  https://docs.ray.io/en/latest/serve/http-guide.html
 #  https://github.com/encode/starlette/discussions/2094
-#  investiagate the communication between the client and server via:
+#  investigate the communication between client and server via:
 #  sudo tcpdump -w dump.txt -i br-03b80e976dba src 192.168.178.28 -A
 #  check interface id via ifconfig
 
@@ -14,7 +14,7 @@ import time
 import timeit
 from queue import Queue
 from threading import Thread, Event
-from typing import Generator, Iterator
+from typing import Iterator, AsyncGenerator, TypeAlias
 
 import aiofiles
 from fastapi import FastAPI, HTTPException
@@ -22,6 +22,9 @@ from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 from fastapi.responses import StreamingResponse, PlainTextResponse, FileResponse
 from starlette.requests import Request
 from tinytag import TinyTag
+
+C: TypeAlias = str | bytes  # workaround for aiofiles.read returning bytes instead of str when reading byte files
+evts = list()  # list of threads, queues, and events for subsequent cleansing
 
 ICY_METADATA_INTERVAL = 16 * 1024  # bytes
 ICY_BYTES_BLOCK_SIZE = 16  # bytes
@@ -34,15 +37,13 @@ PATH = "/app/data/"  # where the mp3 reside inside docker
 # for testing define environment variable MP3_DIR to overwrite
 if p := os.getenv("MP3_DIR"): PATH = p
 
-evts = list()  # list of threads, queues, and events for subsequent cleansing
-
 
 class MyMP3Reader:
     """
-    Wrapper for aiofiles to circumvent a peculiarity of the
-    aiofiles implementation of the __aexit__ method.
+    Wrapper for aiofiles to circumvent a peculiarity of its implementation
+    of the __aexit__ method.
     """
-    def __init__(self, file: str, mode: str):
+    def __init__(self, file, mode) -> None:
         self.file, self.mode = file, mode
     async def __aenter__(self): return await aiofiles.open(self.file, self.mode)
     async def __aexit__(self, exc_type, exc_val, exc_tb): pass
@@ -70,7 +71,7 @@ def file_shuffle() -> list:
                  if os.path.isfile(PATH + f) and f.endswith(".mp3")]
     if not mp3_files:
         raise FileNotFoundError(
-            f"No mp3 files found in the directory: {PATH}")
+            f"No mp3 files found in directory {PATH}")
     return random.sample(mp3_files, len(mp3_files))
 
 
@@ -94,7 +95,7 @@ def mp3_metadata(
         "disc_total": tag.disc_total,  # total number of discs as integer
         "genre": tag.genre,  # genre as string
         "title": tag.title  # title of track as string, mp3-filename otherwise
-            if tag.title else os.path.basename(filepath).rstrip(".mp3"),
+        if tag.title else os.path.basename(filepath).rstrip(".mp3"),
         "track": tag.track,  # track number as integer
         "track_total": tag.track_total,  # total number of tracks as integer
         "year": tag.year,  # year or date as string
@@ -207,7 +208,7 @@ async def iterfile_mod(
         request: Request = None,
         msg: list = None,
         bitrate: float = None,
-) -> Generator[bytes, None, None]:
+) -> AsyncGenerator[bytes, None]:
     """
     Generator that yields chunks of the mp3 file. If the flag is set, it will
     also yield metadata. The stream is delayed by a retention time, depending on
@@ -222,7 +223,10 @@ async def iterfile_mod(
     by the client - becomes negative, i.e. discontinues the byte stream
     :raises HTTPException: if the file is not found or any other error occurs
     """
-    q: Queue = None
+    chunk: C
+    retention = ICY_METADATA_INTERVAL / (bitrate * 1000 / 8)
+    correction = 0.
+    t_total = 0.
 
     if flag := request.headers.get('icy-metadata') == '1':
         q = Queue()
@@ -255,10 +259,6 @@ async def iterfile_mod(
                 'event': event
             })
 
-    retention = ICY_METADATA_INTERVAL / (bitrate * 1000 / 8)
-    correction = 0.
-    t_total = 0.
-
     async with MyMP3Reader(
             file=path,
             mode="rb") as mp3_stream:
@@ -286,7 +286,7 @@ async def iterfile_mod(
                 correction = timeit.default_timer() - t_start - t_total
                 # print(correction, timeit.default_timer() - t_start, t_total)
 
-    print(f"Streaming ended for: {request.headers['user-agent']}")
+    print(f"Streaming ended for {request.headers['user-agent']}")
 
 
 eternal_iterator: Iterator[str] = endless_generator(iterable=file_shuffle())
@@ -294,7 +294,7 @@ eternal_iterator: Iterator[str] = endless_generator(iterable=file_shuffle())
 app = FastAPI(
     docs_url=None,
     redoc_url=None,
-    title="Internetradio Web Server"
+    title="Internet Radio Web Server"
 )
 
 
@@ -365,8 +365,9 @@ def overridden_redoc():
 @app.get(path="/", include_in_schema=False)
 def nogo():
     return PlainTextResponse(
-        "No trespassing on this Internetradio Web Server\n"
-        "We'll be watching you. Don't you ever dare, never ever!")
+        "No trespassing on this internet radio Web Server\n"
+        "We'll be watching you. Don't you ever dare, never ever\n"
+        "The client IP of each request is being recorded.")
 
 
 def main() -> None:
